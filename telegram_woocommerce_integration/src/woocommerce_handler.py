@@ -1,116 +1,220 @@
-import requests
+# woocommerce_handler_py_content
 import logging
-from . import config
+from woocommerce import API
+from src.config import (
+    logger,
+    WOOCOMMERCE_STORE_URL,
+    WOOCOMMERCE_CONSUMER_KEY,
+    WOOCOMMERCE_CONSUMER_SECRET
+)
 
-logger = logging.getLogger(__name__)
-
-def get_products(page=1, per_page=10):
+def get_wc_api_client():
     """
-    Fetches products from WooCommerce API.
-    Handles pagination.
+    Initializes and returns a WooCommerce API client.
+    Returns None if configuration is missing.
     """
-    if not config.WOOCOMMERCE_STORE_URL or \
-       not config.WOOCOMMERCE_CONSUMER_KEY or \
-       not config.WOOCOMMERCE_CONSUMER_SECRET:
-        logger.error("WooCommerce API credentials are not configured.")
-        return []
+    if not all([WOOCOMMERCE_STORE_URL, WOOCOMMERCE_CONSUMER_KEY, WOOCOMMERCE_CONSUMER_SECRET]):
+        logger.error("WooCommerce API credentials (URL, Key, or Secret) are not fully configured in .env.")
+        return None
 
-    products_url = f"{config.WOOCOMMERCE_STORE_URL.rstrip('/')}/wp-json/wc/v3/products"
-    params = {
-        "consumer_key": config.WOOCOMMERCE_CONSUMER_KEY,
-        "consumer_secret": config.WOOCOMMERCE_CONSUMER_SECRET,
-        "page": page,
-        "per_page": per_page,
-        "status": "publish", # Fetch only published products
-    }
     try:
-        response = requests.get(products_url, params=params, timeout=20)
-        response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching products from WooCommerce: {e}")
-        return []
+        wcapi = API(
+            url=WOOCOMMERCE_STORE_URL,
+            consumer_key=WOOCOMMERCE_CONSUMER_KEY,
+            consumer_secret=WOOCOMMERCE_CONSUMER_SECRET,
+            version="wc/v3",
+            timeout=10  # Added timeout
+        )
+        logger.info(f"WooCommerce API client initialized for URL: {WOOCOMMERCE_STORE_URL}")
+        return wcapi
+    except Exception as e:
+        logger.error(f"Failed to initialize WooCommerce API client: {e}", exc_info=True)
+        return None
 
-def get_all_products():
+def test_woocommerce_connection():
     """
-    Fetches all products from WooCommerce, handling pagination.
+    Tests the connection to the WooCommerce API by fetching store information.
+    Returns True if connection is successful, False otherwise.
     """
-    all_products = []
-    page = 1
-    per_page = 20 # Adjust as needed, max 100 for WooCommerce
-    while True:
-        logger.info(f"Fetching products page {page}...")
-        products = get_products(page=page, per_page=per_page)
-        if not products:
-            break
-        all_products.extend(products)
-        if len(products) < per_page: # Last page
-            break
-        page += 1
-    logger.info(f"Total products fetched: {len(all_products)}")
-    return all_products
-
-def check_product_stock_status(product):
-    """
-    Checks if a product is out of stock based on its name containing a keyword.
-    Returns True if out of stock, False otherwise.
-    """
-    if not product or 'name' not in product:
-        logger.warning("Invalid product data received.")
+    logger.info("Testing WooCommerce API connection...")
+    wcapi = get_wc_api_client()
+    if not wcapi:
+        logger.error("Cannot test WooCommerce connection: API client failed to initialize.")
         return False
 
-    product_name = product['name'].lower()
-    # Check if the product is marked as out of stock or if its name contains the keyword
-    is_out_of_stock_api = not product.get('in_stock', True) # if in_stock is missing, assume it is in stock
-
-    keyword_in_name = config.OUT_OF_STOCK_KEYWORD.lower() in product_name
-
-    if is_out_of_stock_api:
-        logger.info(f"Product '{product['name']}' (ID: {product['id']}) is out of stock via API status.")
-        return True
-
-    if keyword_in_name:
-        logger.info(f"Product '{product['name']}' (ID: {product['id']}) contains out-of-stock keyword.")
-        return True
-
-    return False
-
-if __name__ == '__main__':
-    # This is for testing purposes.
-    # Remember to set up your .env file with actual credentials before running.
-    import logging.config
-    logging.config.dictConfig(config.LOGGING_CONFIG)
-
-    logger.info("Testing WooCommerce Handler...")
-
-    # Create a .env file with your actual store URL and keys for testing
-    if not all([config.WOOCOMMERCE_STORE_URL, config.WOOCOMMERCE_CONSUMER_KEY, config.WOOCOMMERCE_CONSUMER_SECRET]):
-        logger.warning("WooCommerce environment variables are not set. Skipping live API test.")
-        print("Please set up your .env file with WooCommerce credentials to test this module.")
-    else:
-        logger.info(f"Fetching products from {config.WOOCOMMERCE_STORE_URL}")
-
-        # Test fetching a single page of products
-        # products_page = get_products(per_page=5)
-        # if products_page:
-        #     logger.info(f"Successfully fetched {len(products_page)} products for the first page.")
-        #     for prod in products_page:
-        #         logger.info(f"Product: {prod['name']} (ID: {prod['id']}), Stock Status: {'Out of Stock' if not prod.get('in_stock') else 'In Stock'}")
-        # else:
-        #     logger.warning("Could not fetch any products for the first page test.")
-
-        # Test fetching all products
-        all_prods = get_all_products()
-        if all_prods:
-            logger.info(f"Successfully fetched a total of {len(all_prods)} products.")
-            out_of_stock_count = 0
-            for i, prod in enumerate(all_prods):
-                # if i < 5: # Log details for the first 5 products
-                #     logger.info(f"Product: {prod['name']} (ID: {prod['id']}), Stock Status: {'Out of Stock' if not prod.get('in_stock') else 'In Stock'}, Price: {prod.get('price')}")
-                if check_product_stock_status(prod):
-                    out_of_stock_count += 1
-                    logger.info(f"Product identified as out of stock: {prod['name']}")
-            logger.info(f"Total products identified as out of stock by keyword or API: {out_of_stock_count}")
+    try:
+        # A simple GET request, like fetching system status or main endpoint
+        response = wcapi.get("") # Fetches the index of the API
+        if response.status_code == 200:
+            store_data = response.json()
+            logger.info(f"WooCommerce API connection successful. Store name: {store_data.get('name', 'N/A')}")
+            return True
         else:
-            logger.warning("Could not fetch any products for the all products test.")
-    logger.info("WooCommerce Handler test finished.")
+            logger.error(f"WooCommerce API connection test failed. Status code: {response.status_code}, Response: {response.text[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"Error during WooCommerce API connection test: {e}", exc_info=True)
+        return False
+
+def get_product_by_sku(sku: str):
+    """
+    Retrieves a product from WooCommerce by its SKU.
+    Returns the product data if found, None otherwise.
+    """
+    if not sku:
+        logger.warning("SKU not provided for get_product_by_sku.")
+        return None
+
+    wcapi = get_wc_api_client()
+    if not wcapi:
+        return None
+
+    logger.info(f"Searching for product with SKU: {sku}")
+    try:
+        response = wcapi.get("products", params={"sku": sku})
+        products = response.json()
+        if response.status_code == 200 and products:
+            logger.info(f"Found product with SKU '{sku}': {products[0]['name']}")
+            return products[0]
+        elif not products:
+            logger.info(f"No product found with SKU: {sku}")
+            return None
+        else:
+            logger.error(f"Failed to get product by SKU '{sku}'. Status: {response.status_code}, Response: {response.text[:200]}")
+            return None
+    except Exception as e:
+        logger.error(f"Exception while getting product by SKU '{sku}': {e}", exc_info=True)
+        return None
+
+def create_woocommerce_product(product_data: dict):
+    """
+    Creates a new product in WooCommerce.
+    product_data should be a dictionary conforming to WooCommerce API for products.
+    Example: {'name': 'Test Product', 'type': 'simple', 'regular_price': '10.99', 'sku': 'TEST001'}
+    Returns the created product data from API or None on failure.
+    """
+    wcapi = get_wc_api_client()
+    if not wcapi:
+        return None
+
+    logger.info(f"Attempting to create WooCommerce product: {product_data.get('name', 'N/A')} (SKU: {product_data.get('sku', 'N/A')})")
+    try:
+        response = wcapi.post("products", product_data)
+        if response.status_code == 201: # 201 Created
+            created_product = response.json()
+            logger.info(f"Successfully created product '{created_product['name']}' (ID: {created_product['id']}) in WooCommerce.")
+            return created_product
+        else:
+            logger.error(f"Failed to create product. Status: {response.status_code}, Response: {response.text[:500]}") # Log more of the error
+            return None
+    except Exception as e:
+        logger.error(f"Exception during product creation: {e}", exc_info=True)
+        return None
+
+def update_woocommerce_product_stock(product_id: int, stock_status: str = 'outofstock', stock_quantity: int = 0):
+    """
+    Updates the stock status and quantity of a product in WooCommerce.
+    product_id: The WooCommerce product ID.
+    stock_status: 'instock', 'outofstock', or 'onbackorder'.
+    stock_quantity: The new stock quantity. Only set if manage_stock is true for the product.
+    """
+    wcapi = get_wc_api_client()
+    if not wcapi:
+        return None
+
+    data = {
+        "stock_status": stock_status
+    }
+    # If manage_stock is True for a product, WooCommerce expects stock_quantity.
+    # However, simply setting stock_status is often sufficient for products not managing stock at product level.
+    # For robustness, this example primarily focuses on stock_status.
+    # If stock_quantity is explicitly provided and non-zero, or if the intention is to manage stock,
+    # this part might need adjustment, e.g. by first fetching product to check 'manage_stock'
+    # data['manage_stock'] = True # If you want to enforce stock management
+    # data['stock_quantity'] = stock_quantity # Then also set quantity
+
+    logger.info(f"Attempting to update stock for product ID {product_id} to '{stock_status}'.")
+    try:
+        response = wcapi.put(f"products/{product_id}", data)
+        if response.status_code == 200:
+            updated_product = response.json()
+            logger.info(f"Successfully updated stock for product ID {product_id}. New status: {updated_product.get('stock_status')}")
+            return updated_product
+        else:
+            logger.error(f"Failed to update stock for product ID {product_id}. Status: {response.status_code}, Response: {response.text[:500]}")
+            return None
+    except Exception as e:
+        logger.error(f"Exception during stock update for product ID {product_id}: {e}", exc_info=True)
+        return None
+
+if __name__ == "__main__":
+    logger.info("Running woocommerce_handler.py directly for testing...")
+    # Ensure config is loaded and validated if you are using validate_basic_config from config.py
+    # from src.config import validate_basic_config
+    # try:
+    #     validate_basic_config() # This is important if the functions rely on it for pre-checks
+    # except ValueError as e:
+    #    logger.error(f"Configuration validation failed: {e}. Tests might not run correctly.")
+    #    # Depending on severity, you might exit or just warn
+
+    connection_ok = test_woocommerce_connection()
+    logger.info(f"WooCommerce connection test result: {'OK' if connection_ok else 'Failed'}")
+
+    if connection_ok:
+        logger.info("Attempting further tests (get, create, update)... This requires a live WooCommerce store and valid API keys.")
+
+        sku_to_test = "TESTSKU123" # Example SKU
+        product = get_product_by_sku(sku_to_test)
+        if product:
+            logger.info(f"Found product by SKU '{sku_to_test}': ID {product['id']}, Name: {product['name']}")
+        else:
+            logger.info(f"Product with SKU '{sku_to_test}' not found or API call failed. This might be expected if it doesn't exist.")
+
+        new_product_data = {
+            'name': 'Bot Test Product Py',
+            'type': 'simple',
+            'regular_price': '23.99',
+            'sku': 'BOTTESTPY001', # Using a unique SKU
+            'description': 'This is a test product created by the bot script for testing purposes.',
+            'stock_status': 'instock' # Initially in stock
+        }
+
+        # Check if product with this SKU already exists to avoid error on re-run
+        existing_test_product = get_product_by_sku(new_product_data['sku'])
+        created_product = None
+        if not existing_test_product:
+            created_product = create_woocommerce_product(new_product_data)
+            if created_product:
+                logger.info(f"Test product created: ID {created_product['id']}, Name: {created_product['name']}")
+            else:
+                logger.error("Failed to create test product. Further tests depending on it will be skipped.")
+        else:
+            logger.info(f"Test product with SKU {new_product_data['sku']} already exists (ID: {existing_test_product['id']}). Using existing product for update test.")
+            created_product = existing_test_product
+
+
+        if created_product and created_product.get('id'):
+            product_id_to_update = created_product['id']
+
+            # Test updating stock to 'outofstock'
+            logger.info(f"Attempting to mark product ID {product_id_to_update} as out of stock...")
+            updated_product_stock_out = update_woocommerce_product_stock(product_id_to_update, stock_status='outofstock')
+            if updated_product_stock_out:
+                logger.info(f"Stock updated for product ID {product_id_to_update}. New status: {updated_product_stock_out.get('stock_status')}")
+            else:
+                logger.error(f"Failed to update stock to 'outofstock' for product ID {product_id_to_update}.")
+
+            # Test updating stock back to 'instock' (optional, good for cleanup)
+            # logger.info(f"Attempting to mark product ID {product_id_to_update} as back in stock...")
+            # updated_product_stock_in = update_woocommerce_product_stock(product_id_to_update, stock_status='instock')
+            # if updated_product_stock_in:
+            #     logger.info(f"Stock updated for product ID {product_id_to_update}. New status: {updated_product_stock_in.get('stock_status')}")
+            # else:
+            #     logger.error(f"Failed to update stock to 'instock' for product ID {product_id_to_update}.")
+        elif not created_product : #Only log if it failed and was not pre-existing
+             logger.warning("Skipping product update tests as test product creation/retrieval failed.")
+
+    else:
+        logger.warning("Skipping further WooCommerce interaction tests as the initial connection test failed (likely due to placeholder credentials or network issues).")
+
+    logger.info("woocommerce_handler.py test run finished.")
